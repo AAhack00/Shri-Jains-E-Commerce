@@ -26,7 +26,6 @@ export const CartProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [cart, setCart] = useState<CartItem[]>([]);
   const [couponCode, setCouponCode] = useState<string | null>(null);
 
-  // Calculate delivery date once when the provider mounts
   const [deliveryDate] = useState(() => {
     return new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toDateString();
   });
@@ -60,15 +59,12 @@ export const CartProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const cartTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
-
-  // UPDATED SHIPPING LOGIC: Free if >= 2000, else 100
   const shippingCharge = cartTotal >= 2000 ? 0 : 100;
 
-  // Coupon Logic
   const discount = useMemo(() => {
     if (!couponCode) return 0;
     if (couponCode === 'WELCOME50') return 50;
-    if (couponCode === 'SJSM10') return Math.round(cartTotal * 0.10); // 10% off
+    if (couponCode === 'SJSM10') return Math.round(cartTotal * 0.10);
     return 0;
   }, [cartTotal, couponCode]);
 
@@ -116,7 +112,7 @@ interface ExtendedUser extends User {
 interface AuthContextType {
   user: ExtendedUser | null;
   login: (email: string, password?: string) => boolean;
-  register: (user: ExtendedUser) => boolean;
+  register: (extendedUser: ExtendedUser) => boolean;
   logout: () => void;
   updateProfile: (updatedData: Partial<ExtendedUser>) => void;
   orders: Order[];
@@ -132,18 +128,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
 
-  // Load active session
   useEffect(() => {
     const savedUser = localStorage.getItem('sjsm_active_user');
     if (savedUser) {
         const parsedUser = JSON.parse(savedUser);
-        // Ensure we load the freshest data from sjsm_users to get updated points
         const usersStr = localStorage.getItem('sjsm_users');
         if (usersStr) {
             const users: ExtendedUser[] = JSON.parse(usersStr);
             const freshUserData = users.find(u => u.id === parsedUser.id);
             if (freshUserData) {
                 setUser(freshUserData);
+                // Load orders for this user
+                const allOrdersStr = localStorage.getItem(`sjsm_orders_${freshUserData.id}`);
+                if (allOrdersStr) {
+                    setOrders(JSON.parse(allOrdersStr));
+                }
                 return;
             }
         }
@@ -154,14 +153,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const login = (email: string, password?: string) => {
     const usersStr = localStorage.getItem('sjsm_users');
     const users: ExtendedUser[] = usersStr ? JSON.parse(usersStr) : [];
-    
     const foundUser = users.find(u => u.email === email && (!password || u.password === password));
-    
     if (foundUser) {
-      // Ensure loyalty points exist
       const userWithPoints = { loyaltyPoints: 0, ...foundUser };
       setUser(userWithPoints);
       localStorage.setItem('sjsm_active_user', JSON.stringify(userWithPoints));
+      const allOrdersStr = localStorage.getItem(`sjsm_orders_${userWithPoints.id}`);
+      if (allOrdersStr) setOrders(JSON.parse(allOrdersStr));
       return true;
     }
     return false;
@@ -170,39 +168,27 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const register = (newUser: ExtendedUser) => {
     const usersStr = localStorage.getItem('sjsm_users');
     const users: ExtendedUser[] = usersStr ? JSON.parse(usersStr) : [];
-    
-    if (users.find(u => u.email === newUser.email)) {
-      return false; // User exists
-    }
-
+    if (users.find(u => u.email === newUser.email)) return false;
     const userWithId = { ...newUser, id: `u-${Date.now()}`, loyaltyPoints: 0 };
     const updatedUsers = [...users, userWithId];
     localStorage.setItem('sjsm_users', JSON.stringify(updatedUsers));
-    
-    // Auto login
     setUser(userWithId);
     localStorage.setItem('sjsm_active_user', JSON.stringify(userWithId));
+    setOrders([]);
     return true;
   };
 
   const logout = () => {
     setUser(null);
+    setOrders([]);
     localStorage.removeItem('sjsm_active_user');
   };
 
   const updateProfile = (updatedData: Partial<ExtendedUser>) => {
     if (!user) return;
-    
-    // Merge updates
     const updatedUser = { ...user, ...updatedData };
-    
-    // Update State
     setUser(updatedUser);
-    
-    // Update Active Session Storage
     localStorage.setItem('sjsm_active_user', JSON.stringify(updatedUser));
-    
-    // Update Persistent Database (sjsm_users)
     const usersStr = localStorage.getItem('sjsm_users');
     if (usersStr) {
         const users: ExtendedUser[] = JSON.parse(usersStr);
@@ -212,20 +198,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const addOrder = (order: Order) => {
-    setOrders(prev => [order, ...prev]);
+    if (!user) return;
+    const updatedOrders = [order, ...orders];
+    setOrders(updatedOrders);
+    localStorage.setItem(`sjsm_orders_${user.id}`, JSON.stringify(updatedOrders));
   };
 
   const addProductReview = (productId: number, review: Review) => {
     setProducts(prev => prev.map(p => {
         if (p.id === productId) {
             const newReviews = [...(p.userReviews || []), review];
-            // Recalculate rating
-            const totalRating = newReviews.reduce((sum, r) => sum + r.rating, 0) + (p.rating * p.reviews);
-            const totalCount = newReviews.length + p.reviews;
-            return {
-                ...p,
-                userReviews: newReviews
-            };
+            return { ...p, userReviews: newReviews };
         }
         return p;
     }));
